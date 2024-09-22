@@ -191,7 +191,7 @@ session_2_edges <- corpus %>%
 
 session_2_nodes <- corpus %>%
   filter(session_id == 2) %>%
-  filter(speaker_id %in% edges$source | speaker_id == target_child) %>%
+  filter(speaker_id %in% session_2_edges$source | speaker_id == target_child) %>%
   distinct(speaker_id, speaker_type) %>%
   rename(name = speaker_id)
 
@@ -214,7 +214,7 @@ plot <- ggraph(session_2_network, layout = 'linear', circular = TRUE) +
 
 animate(plot, height = 800, width = 800)
 
-anim_save(here("plots/overall_mess.gif"), animation = last_animation())
+anim_save(here("plots/session_2.gif"), animation = last_animation())
 
 
 ```
@@ -233,7 +233,7 @@ session_8_edges <- corpus %>%
 
 session_8_nodes <- corpus %>%
   filter(session_id == 8) %>%
-  filter(speaker_id %in% edges$source | speaker_id == target_child) %>%
+  filter(speaker_id %in% session_8_edges$source | speaker_id == target_child) %>%
   distinct(speaker_id, speaker_type) %>%
   rename(name = speaker_id)
 
@@ -256,8 +256,87 @@ plot <- ggraph(session_8_network, layout = 'linear', circular = TRUE) +
 
 animate(plot, height = 800, width = 800)
 
-anim_save(here("plots/overall_mess.gif"), animation = last_animation())
+anim_save(here("plots/session_8.gif"), animation = last_animation())
 
 
 ```
 
+```{r}
+session_2_edges_agg <- corpus %>%
+  filter(session_id == 2) %>%
+  group_by(target_child, session_id, time_frame) %>%
+  distinct(speaker_id) %>%
+  rename(source = speaker_id) %>%
+  mutate(target = source) %>%
+  complete(source, target) %>%
+  filter(!(source == target)) %>%
+  ungroup() %>%
+  group_by(target_child, session_id, source, target) %>%
+  summarise(strength = n()) %>%
+  select(source, target, target_child, session_id, strength)
+
+session_2_nodes_agg <- corpus %>%
+  filter(session_id == 2) %>%
+  filter(speaker_id %in% session_2_edges_agg$source | speaker_id == target_child) %>%
+  distinct(speaker_id, speaker_type) %>%
+  rename(name = speaker_id)
+
+session_2_network_agg <- graph_from_data_frame(d = session_2_edges_agg, vertices = session_2_nodes_agg, directed = F)
+
+agg_2_plot <- ggraph(session_2_network_agg, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc(aes(alpha = strength)) +
+  geom_node_point(aes(color = speaker_type)) +
+  facet_wrap(~target_child) +
+  theme_minimal() + theme(axis.line=element_blank(),axis.text.x=element_blank(),
+          axis.text.y=element_blank(),axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),legend.position="none",
+          panel.background=element_blank(),panel.border=element_blank(),panel.grid.major=element_blank(),
+          panel.grid.minor=element_blank(),plot.background=element_blank())
+
+
+ggsave(here("plots/session_2_aggregate.png"), agg_2_plot, width = 6, height = 6)
+
+
+```
+
+```{r}
+session_8_edges_agg <- corpus %>%
+  filter(session_id == 8) %>%
+  group_by(target_child, session_id, time_frame) %>%
+  distinct(speaker_id) %>%
+  rename(source = speaker_id) %>%
+  mutate(target = source) %>%
+  complete(source, target) %>%
+  filter(!(source == target)) %>%
+  ungroup() %>%
+  group_by(target_child, session_id, source, target) %>%
+  summarise(strength = n()) %>%
+  select(source, target, target_child, session_id, strength)
+
+session_8_nodes_agg <- corpus %>%
+  filter(session_id == 8) %>%
+  filter(speaker_id %in% session_8_edges_agg$source | speaker_id == target_child) %>%
+  distinct(speaker_id, speaker_type) %>%
+  rename(name = speaker_id)
+
+session_8_network_agg <- graph_from_data_frame(d = session_8_edges_agg, vertices = session_8_nodes_agg, directed = F)
+
+agg_8_plot <- ggraph(session_8_network_agg, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc(aes(alpha = strength)) +
+  geom_node_point(aes(color = speaker_type)) +
+  facet_wrap(~target_child) +
+  theme_minimal() + theme(axis.line=element_blank(),axis.text.x=element_blank(),
+          axis.text.y=element_blank(),axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),legend.position="none",
+          panel.background=element_blank(),panel.border=element_blank(),panel.grid.major=element_blank(),
+          panel.grid.minor=element_blank(),plot.background=element_blank())
+
+
+ggsave(here("plots/session_8_aggregate.png"), agg_8_plot, width = 6, height = 6)
+
+
+
+
+```
