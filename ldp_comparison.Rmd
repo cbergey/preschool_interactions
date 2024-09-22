@@ -1,0 +1,64 @@
+---
+title: "ldp_analysis"
+output: html_document
+date: "2024-09-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+ldp <- read_csv(here("private_data/ldp_frames.csv"))
+
+ldp <- ldp %>%
+  filter(age_months > 44,
+         age_months < 56)
+
+udmodel <- udpipe_load_model(file = here("helpers/english-ewt-ud-2.4-190531.udpipe"))
+
+get_parse <- function(txt) {
+  parses <- txt %>%
+    udpipe(., udmodel, parallel.cores = 4) %>%
+    as_tibble() %>%
+    mutate(parse = upos)
+
+  return(paste(parses$parse, collapse = " "))
+}
+
+vget_parse <- Vectorize(get_parse)
+
+get_frame <- function(txt) {
+  parses <- txt %>%
+    udpipe(., udmodel, parallel.cores = 4) %>%
+    as_tibble() %>%
+    mutate(parse = if_else(token %in% common_words$word, token, upos),
+           parse = if_else((token == "'s" & upos == "PART"), upos, parse))
+
+  return(paste(parses$parse, collapse = " "))
+}
+
+vget_frame <- Vectorize(get_frame)
+
+common_words_ldp <- ldp %>%
+  mutate(utterance = str_remove_all(utterance, "[,\\.!\\?]"),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "'", " '")) %>%
+  mutate(word = strsplit(utterance, " ")) %>% 
+  unnest(word) %>%
+  group_by(word) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  arrange(desc(n)) %>%
+  slice(1:150)
+
+common_frames_ldp <- ldp %>%
+  count(frame) %>%
+  arrange(desc(n))
+
+multiword_frame_ldp <- common_frames_ldp %>%
+  filter(lengths(str_split(frame, " ")) > 2)
+
+
+```

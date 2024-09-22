@@ -1,0 +1,263 @@
+---
+title: "interaction analysis"
+output: html_document
+date: "2024-08-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(zoo)
+library(udpipe)
+library(lubridate)
+library(entropy)
+library(ggraph)
+library(igraph)
+library(gganimate)
+library(RColorBrewer)
+```
+
+```{r read-data}
+corpus <- read_csv(here("interactions.csv"))
+raw_corpus <- read_csv(here("interactions_raw.csv"))
+people <- read_csv(here("preschool_person_ids.csv"))
+sessions <- read_csv(here("preschool_session.csv"))
+
+corpus <- corpus %>%
+  mutate(child_id = as.numeric(child_id),
+         target_child = if_else(child_id < 10, paste0("CHILD_0", child_id),
+                            paste0("CHILD_", child_id)),
+         speaker_type = if_else(str_detect(speaker_id, "CHILD"), "child", "adult"),
+         session_id = as.numeric(session_id),
+         classroom = if_else(child_id < 18 | child_id == 37, "threes", "fours")) %>%
+  group_by(child_id, session_id) %>%
+  mutate(time_frame = round(timestamp/30, 0)) %>%
+  ungroup() %>% 
+  left_join(people %>% select(child_id, date_birth), by = c("child_id")) %>%
+  left_join(sessions %>% select(session, date, person_id), 
+            by = c("child_id" = "person_id", "session_id" = "session")) %>%
+  mutate(date_birth = as.Date(as.yearmon(date_birth, "%m/%Y")),
+         date = as.Date(date, "%m/%d/%y"),
+         age = as.numeric(date - date_birth)/30) %>%
+  mutate(speaker_code = "CHI",
+         transcript_file = paste(child_id, session_id, sep = "_")) %>%
+  mutate(utterance = str_replace_all(utterance, ",", " ,"),
+         utterance = str_replace_all(utterance, "\\.", " ."),
+         utterance = str_replace_all(utterance, "\\?", " \\?"),
+         utterance = str_replace_all(utterance, "!", " !"),
+         utterance = str_to_lower(utterance)) %>%
+  filter(!is.na(utterance))
+```
+
+```{r udpipe}
+udmodel <- udpipe_load_model(file = "english-ewt-ud-2.4-190531.udpipe")
+
+common_words <- corpus %>%
+  mutate(utterance = str_remove_all(utterance, "[,\\.!\\?]"),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "'", " '")) %>%
+  mutate(word = strsplit(utterance, " ")) %>% 
+  unnest(word) %>%
+  group_by(word) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  arrange(desc(n)) %>%
+  slice(1:150)
+
+get_parse <- function(txt) {
+  parses <- txt %>%
+    udpipe(., udmodel, parallel.cores = 4) %>%
+    as_tibble() %>%
+    mutate(parse = upos)
+
+  return(paste(parses$parse, collapse = " "))
+}
+
+vget_parse <- Vectorize(get_parse)
+
+get_frame <- function(txt) {
+  parses <- txt %>%
+    udpipe(., udmodel, parallel.cores = 4) %>%
+    as_tibble() %>%
+    mutate(parse = if_else(token %in% common_words$word, token, upos),
+           parse = if_else((token == "'s" & upos == "PART"), upos, parse))
+
+  return(paste(parses$parse, collapse = " "))
+}
+
+vget_frame <- Vectorize(get_frame)
+
+corpus_pos <- corpus %>%
+  mutate(utterance = str_remove_all(utterance, "[,\\.!\\?]"),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", " ")) %>%
+  filter(!is.na(utterance),
+         trimws(utterance) != "") %>%
+  mutate(frame = vget_frame(utterance))
+
+# corpus_pos <- corpus_pos %>%
+#   mutate(tokens = str_remove_all(tokens, ","),
+#          tokens = str_replace_all(tokens, "'", " '")) %>%
+#   mutate(tokens = str_split(tokens, " "),
+#          pos = str_split(pos, " "),
+#          pos = str_replace_all(pos, "pro:wh", "pro:int")) %>%
+#   rowwise() %>%
+#   mutate_if(is.list, ~paste(unlist(.), collapse = '\", \"')) %>%
+#   mutate(tokens = paste0('[\"', tokens),
+#          pos = paste0('[\"', pos),
+#          tokens = paste0(tokens, '\"]'),
+#          pos = paste0(pos, '\"]'))
+```
+
+```{r}
+common_frames <- corpus_pos %>%
+  count(frame) %>%
+  arrange(desc(n))
+
+multiword_frame <- common_frames %>%
+  filter(lengths(str_split(frame, " ")) > 2)
+
+frame_ent <- corpus_pos %>%
+  group_by(child_id, session_id, age) %>%
+  count(frame) %>%
+  summarise(frame_ent = entropy(n))
+```
+```{r}
+n_words <- raw_corpus %>%
+  mutate(utterance = str_remove_all(utterance, "[,\\.!\\?']"),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = trimws(utterance)) %>%
+  mutate(n_words = lengths(strsplit(utterance, "\\W+"))) %>%
+  group_by(child_id, session_id) %>%
+  summarise(n_words = sum(n_words)) %>%
+  ungroup() %>%
+  summarise(mean(n_words))
+
+```
+```{r}
+one_session <- corpus %>%
+  filter(session_id == 2, child_id == 1)
+
+edges <- one_session %>%
+  group_by(time_frame) %>%
+  distinct(speaker_id) %>%
+  rename(source = speaker_id) %>%
+  mutate(target = source) %>%
+  complete(source, target) %>%
+  filter(!(source == target)) %>%
+  ungroup() %>%
+  select(source, target, time_frame)
+
+grouped_edges <- edges %>%
+  count(source, target) %>%
+  rename(importance = n)
+
+nodes <- one_session %>%
+  filter(speaker_id %in% edges$source | speaker_id == target_child) %>%
+  distinct(speaker_id, speaker_type) %>%
+  rename(name = speaker_id, carac = speaker_type)
+
+network <- graph_from_data_frame(d = edges, vertices = nodes, directed = F)
+
+coul  <- brewer.pal(3, "Set1") 
+my_color <- coul[as.numeric(as.factor(V(network)$carac))]
+plot(network, vertex.color=my_color)
+
+ggraph(network, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc() +
+  geom_node_text(aes(label = name)) +
+  transition_states(time_frame) +
+  ggtitle(paste0("time point: ", "{closest_state}"))
+
+anim_save(here("plots/child_1.gif"), animation = last_animation())
+ 
+```
+
+```{r}
+session_2_edges <- corpus %>%
+  filter(session_id == 2) %>%
+  group_by(target_child, session_id, time_frame) %>%
+  distinct(speaker_id) %>%
+  rename(source = speaker_id) %>%
+  mutate(target = source) %>%
+  complete(source, target) %>%
+  filter(!(source == target)) %>%
+  ungroup() %>%
+  select(source, target, target_child, session_id, time_frame)
+
+session_2_nodes <- corpus %>%
+  filter(session_id == 2) %>%
+  filter(speaker_id %in% edges$source | speaker_id == target_child) %>%
+  distinct(speaker_id, speaker_type) %>%
+  rename(name = speaker_id)
+
+session_2_network <- graph_from_data_frame(d = session_2_edges, vertices = session_2_nodes, directed = F)
+
+plot <- ggraph(session_2_network, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc() +
+  geom_node_point(aes(color = speaker_type)) +
+  transition_states(time_frame) +
+  ggtitle(paste0("time point: ", "{closest_state}")) +
+  facet_wrap(~target_child) +
+  theme_minimal() + theme(axis.line=element_blank(),axis.text.x=element_blank(),
+          axis.text.y=element_blank(),axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),legend.position="none",
+          panel.background=element_blank(),panel.border=element_blank(),panel.grid.major=element_blank(),
+          panel.grid.minor=element_blank(),plot.background=element_blank())
+
+
+
+animate(plot, height = 800, width = 800)
+
+anim_save(here("plots/overall_mess.gif"), animation = last_animation())
+
+
+```
+
+```{r}
+session_8_edges <- corpus %>%
+  filter(session_id == 8) %>%
+  group_by(target_child, session_id, time_frame) %>%
+  distinct(speaker_id) %>%
+  rename(source = speaker_id) %>%
+  mutate(target = source) %>%
+  complete(source, target) %>%
+  filter(!(source == target)) %>%
+  ungroup() %>%
+  select(source, target, target_child, session_id, time_frame)
+
+session_8_nodes <- corpus %>%
+  filter(session_id == 8) %>%
+  filter(speaker_id %in% edges$source | speaker_id == target_child) %>%
+  distinct(speaker_id, speaker_type) %>%
+  rename(name = speaker_id)
+
+session_8_network <- graph_from_data_frame(d = session_8_edges, vertices = session_8_nodes, directed = F)
+
+plot <- ggraph(session_8_network, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc() +
+  geom_node_point(aes(color = speaker_type)) +
+  transition_states(time_frame) +
+  ggtitle(paste0("time point: ", "{closest_state}")) +
+  facet_wrap(~target_child) +
+  theme_minimal() + theme(axis.line=element_blank(),axis.text.x=element_blank(),
+          axis.text.y=element_blank(),axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),legend.position="none",
+          panel.background=element_blank(),panel.border=element_blank(),panel.grid.major=element_blank(),
+          panel.grid.minor=element_blank(),plot.background=element_blank())
+
+
+
+animate(plot, height = 800, width = 800)
+
+anim_save(here("plots/overall_mess.gif"), animation = last_animation())
+
+
+```
+
