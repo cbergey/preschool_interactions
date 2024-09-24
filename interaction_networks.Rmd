@@ -18,6 +18,7 @@ library(gganimate)
 library(RColorBrewer)
 library(stringdist)
 library(wersim)
+library(quanteda)
 ```
 
 ```{r read-data}
@@ -404,41 +405,49 @@ n_extra_in_clean <- reliability_comparison %>%
 # adding together these numbers, we seem to have two utterances unaccounted for
 # possibly due to joining issues. not bad but should be tracked down later.
 
-dict <- reliability_comparison %>%
-  select(utterance, raw_utterance) %>%
-  pivot_longer(cols = c("utterance", "raw_utterance"), 
-                        names_to = "type", values_to = "utterance") %>%
-  filter(!is.na(utterance)) %>% 
-  mutate(utterance = str_remove_all(utterance, "[,\\.!\\?']"),
+comparison_corpus <- reliability_comparison %>%
+  mutate(utterance = str_remove_all(utterance, "[<>,\\.!\\?'\\!]"),
+         utterance = str_remove_all(utterance, "unknown utterance"),
+         utterance = str_remove_all(utterance, "unintelligible"),
          utterance = str_replace_all(utterance, "  ", " "),
          utterance = str_replace_all(utterance, "  ", " "),
          utterance = str_replace_all(utterance, "  ", ""),
          utterance = trimws(utterance)) %>%
-  mutate(word = strsplit(utterance, " ")) %>% 
-  unnest(word) %>%
-  group_by(word) %>%
-  summarise(n = n()) %>%
-  ungroup() %>%
-  arrange(desc(n)) %>%
-  mutate(id = 1:n())
+  mutate(raw_utterance = str_remove_all(raw_utterance, "[<>,\\.!\\?'\\!]"),
+         raw_utterance = str_remove_all(raw_utterance, "unknown utterance"),
+         raw_utterance = str_remove_all(raw_utterance, "unintelligible"),
+         raw_utterance = str_replace_all(raw_utterance, "  ", " "),
+         raw_utterance = str_replace_all(raw_utterance, "  ", " "),
+         raw_utterance = str_replace_all(raw_utterance, "  ", ""),
+         raw_utterance = trimws(raw_utterance)) %>%
+  filter(!is.na(utterance) & !is.na(raw_utterance) &
+         utterance != "" & raw_utterance != "") %>%
+  mutate(name = 1:n(), stringsAsFactors = F)
 
-error_rate <- reliability_comparison %>%
-  filter(!is.na(raw_utterance) & ! is.na(utterance)) %>%
-  mutate(utterance = str_remove_all(utterance, "[,\\.!\\?']"),
-         utterance = str_replace_all(utterance, "  ", " "),
-         utterance = str_replace_all(utterance, "  ", " "),
-         utterance = str_replace_all(utterance, "  ", ""),
-         utterance = trimws(utterance)) %>%
-  mutate(word = strsplit(utterance, " ")) %>% 
-  unnest(word) %>%
+reference_corpus <- comparison_corpus %>%
+  select(utterance, name) %>%
+  rename(text = utterance) %>%
+  quanteda::corpus(docid_field = "name", text_field = "text")
+
+raw_corpus <- comparison_corpus %>%
+  select(raw_utterance, name) %>%
+  rename(text = raw_utterance) %>%
+  quanteda::corpus(docid_field = "name", text_field = "text")
   
 
-edit_dist %>%
-  summarise(mean = mean(edit_dist))
+word_error <- wer(r=reference_corpus,h=raw_corpus)
 
-edit_dist %>%
+
+avg_word_error <- word_error %>%
+  summarise(mean = mean(wer))
+
+speaker_type_error <- comparison_corpus %>%
+  filter(!is.na(utterance) & !is.na(raw_utterance)) %>%
+  cbind(wer = word_error$wer) %>%
   group_by(speaker_type) %>%
-  summarise(mean = mean(edit_dist))
+  summarise(mean = mean(wer))
+
+
 ```
 
 ```{r interaction-dists}
@@ -447,10 +456,19 @@ interaction_counts <- corpus %>%
   count(speaker_id) %>%
   ungroup()
 
+n_interactants <- interaction_counts %>%
+  filter(!str_detect(speaker_id, "UNKNOWN")) %>%
+  group_by(target_child, session_id) %>%
+  summarise(n_interactants = n()) %>%
+  ungroup() 
+
+mean_interactants <- n_interactants %>%
+  summarise(mean_interactants = mean(n_interactants))
+
 coul  <- brewer.pal(2, "Set1") 
 my_color <- coul[as.numeric(as.factor(V(network)$carac))]
 
-interaction_counts %>%
+interaction_zipf <- interaction_counts %>%
   group_by(target_child, session_id) %>%
   arrange(desc(n)) %>%
   mutate(rank = 1:n()) %>%
@@ -464,6 +482,50 @@ interaction_counts %>%
   theme_minimal() + theme(legend.position="none",
           panel.background=element_blank(),panel.border=element_blank(),panel.grid.major=element_blank(),
           plot.background=element_blank())
+ggsave(here("plots/interaction_zipf.png"), interaction_zipf, width = 8, height = 5)
+
+```
+
+```{r}
+session_2_timecourse_plot <- corpus %>%
+  filter(session_id == 2) %>%
+  group_by(target_child, session_id, time_frame) %>%
+  summarise(n_utterances = n(),
+            n_interlocutors = n_distinct(speaker_id)) %>%
+  ungroup() %>%
+  pivot_longer(cols = c("n_utterances", "n_interlocutors"), 
+               names_to = "count_type", values_to = "n", names_prefix = "n_") %>%
+  ggplot(aes(x = time_frame, y = n, color = count_type)) + 
+  geom_line() +
+  facet_wrap(~target_child, ncol=1, dir="v")  +
+  scale_color_brewer(palette = "Accent") +
+  xlab("Interaction bout (30-second increments)") + 
+  ylab("Number of interactants and utterances") +
+  theme_minimal() + theme(legend.position="none",
+          panel.background=element_blank(),panel.border=element_blank(),panel.grid.major=element_blank(),
+          plot.background=element_blank())
+
+ggsave(here("plots/session_2_timecourse.png"), session_2_timecourse_plot, width = 4, height = 8)
+
+session_8_timecourse_plot <- corpus %>%
+  filter(session_id == 8) %>%
+  group_by(target_child, session_id, time_frame) %>%
+  summarise(n_utterances = n(),
+            n_interlocutors = n_distinct(speaker_id)) %>%
+  ungroup() %>%
+  pivot_longer(cols = c("n_utterances", "n_interlocutors"), 
+               names_to = "count_type", values_to = "n", names_prefix = "n_") %>%
+  ggplot(aes(x = time_frame, y = n, color = count_type)) + 
+  geom_line() +
+  facet_wrap(~target_child, ncol=1, dir="v")  +
+  scale_color_brewer(palette = "Accent") +
+  xlab("Interaction bout (30-second increments)") + 
+  ylab("Number of interactants and utterances") +
+  theme_minimal() + theme(legend.position="none",
+          panel.background=element_blank(),panel.border=element_blank(),panel.grid.major=element_blank(),
+          plot.background=element_blank())
+
+ggsave(here("plots/session_8_timecourse.png"), session_8_timecourse_plot, width = 4, height = 8)
 
 
 ```
