@@ -16,6 +16,7 @@ library(ggraph)
 library(igraph)
 library(gganimate)
 library(RColorBrewer)
+library(stringdist)
 ```
 
 ```{r read-data}
@@ -40,8 +41,7 @@ corpus <- corpus %>%
   mutate(date_birth = as.Date(as.yearmon(date_birth, "%m/%Y")),
          date = as.Date(date, "%m/%d/%y"),
          age = as.numeric(date - date_birth)/30) %>%
-  mutate(speaker_code = "CHI",
-         transcript_file = paste(child_id, session_id, sep = "_")) %>%
+  mutate(transcript_file = paste(child_id, session_id, sep = "_")) %>%
   mutate(utterance = str_replace_all(utterance, ",", " ,"),
          utterance = str_replace_all(utterance, "\\.", " ."),
          utterance = str_replace_all(utterance, "\\?", " \\?"),
@@ -338,5 +338,83 @@ ggsave(here("plots/session_8_aggregate.png"), agg_8_plot, width = 6, height = 6)
 
 
 
+
+```
+
+
+```{r reliability}
+sessions_cleaned <- corpus %>%
+  mutate(child_session = paste(target_child, session_id, sep = "_")) %>%
+  distinct(child_session)
+
+reliability_comparison <- raw_corpus %>%
+  mutate(child_id = as.numeric(child_id),
+         target_child = if_else(child_id < 10, paste0("CHILD_0", child_id),
+                            paste0("CHILD_", child_id)),
+         session_id = as.numeric(session_id),
+         classroom = if_else(child_id < 18 | child_id == 37, "threes", "fours"),
+         child_session = paste(target_child, session_id, sep = "_")) %>%
+  group_by(child_id, session_id) %>%
+  mutate(time_frame = round(timestamp/30, 0)) %>%
+  ungroup() %>% 
+  left_join(people %>% select(child_id, date_birth), by = c("child_id")) %>%
+  left_join(sessions %>% select(session, date, person_id), 
+            by = c("child_id" = "person_id", "session_id" = "session")) %>%
+  mutate(date_birth = as.Date(as.yearmon(date_birth, "%m/%Y")),
+         date = as.Date(date, "%m/%d/%y"),
+         age = as.numeric(date - date_birth)/30) %>%
+  mutate(transcript_file = paste(child_id, session_id, sep = "_")) %>%
+  mutate(utterance = str_replace_all(utterance, ",", " ,"),
+         utterance = str_replace_all(utterance, "\\.", " ."),
+         utterance = str_replace_all(utterance, "\\?", " \\?"),
+         utterance = str_replace_all(utterance, "!", " !"),
+         utterance = str_to_lower(utterance)) %>%
+  filter(!is.na(utterance)) %>%
+  filter(child_session %in% sessions_cleaned$child_session) %>%
+  rename(raw_utterance = utterance,
+         raw_speaker_id = speaker_id) %>%
+  full_join(corpus %>% select(child_id, session_id, speaker_id, speaker_type,
+                              timestamp, time_frame, utterance),
+            by = c("child_id", "session_id", "timestamp", "time_frame"))
+
+n_utts_clean <- nrow(corpus)
+
+n_utts_raw <- raw_corpus %>%
+  mutate(child_id = as.numeric(child_id),
+         target_child = if_else(child_id < 10, paste0("CHILD_0", child_id),
+                            paste0("CHILD_", child_id)),
+         session_id = as.numeric(session_id),
+         classroom = if_else(child_id < 18 | child_id == 37, "threes", "fours"),
+         child_session = paste(target_child, session_id, sep = "_")) %>%
+  filter(child_session %in% sessions_cleaned$child_session) %>%
+  mutate(utterance = str_replace_all(utterance, ",", " ,"),
+         utterance = str_replace_all(utterance, "\\.", " ."),
+         utterance = str_replace_all(utterance, "\\?", " \\?"),
+         utterance = str_replace_all(utterance, "!", " !"),
+         utterance = str_to_lower(utterance)) %>%
+  filter(!is.na(utterance)) %>% nrow()
+
+n_extra_in_raw <- reliability_comparison %>%
+  filter(is.na(utterance) & ! is.na(raw_utterance)) %>% nrow()
+
+n_extra_in_clean <- reliability_comparison %>%
+  filter(is.na(raw_utterance) & ! is.na(utterance)) %>% nrow()
+
+# adding together these numbers, we seem to have two utterances unaccounted for
+# possibly due to joining issues. not bad but should be tracked down later.
+
+edit_dist <- reliability_comparison %>%
+  filter(!is.na(raw_utterance) & ! is.na(utterance)) %>%
+  mutate(edit_dist = stringdist(raw_utterance, utterance)) 
+
+edit_dist %>%
+  summarise(mean = mean(edit_dist))
+
+edit_dist %>%
+  group_by(speaker_type) %>%
+  summarise(mean = mean(edit_dist))
+```
+
+```{r interaction-dists}
 
 ```
