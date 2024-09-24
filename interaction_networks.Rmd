@@ -416,5 +416,28 @@ edit_dist %>%
 ```
 
 ```{r interaction-dists}
+interaction_counts <- corpus %>%
+  group_by(target_child, session_id) %>%
+  count(speaker_id) %>%
+  ungroup()
+
+coul  <- brewer.pal(2, "Set1") 
+my_color <- coul[as.numeric(as.factor(V(network)$carac))]
+
+interaction_counts %>%
+  group_by(target_child, session_id) %>%
+  arrange(desc(n)) %>%
+  mutate(rank = 1:n()) %>%
+  ungroup() %>%
+  ggplot(aes(x = log10(rank), y = log10(n), color = factor(session_id))) +
+  geom_point() +
+  scale_color_brewer(palette = "Accent") +
+  facet_wrap(~target_child) +
+  xlab("Rank frequency of interactant (log)") + 
+  ylab("Frequency of interactant (log)") +
+  theme_minimal() + theme(legend.position="none",
+          panel.background=element_blank(),panel.border=element_blank(),panel.grid.major=element_blank(),
+          plot.background=element_blank())
+
 
 ```
