@@ -17,6 +17,7 @@ library(igraph)
 library(gganimate)
 library(RColorBrewer)
 library(stringdist)
+library(wersim)
 ```
 
 ```{r read-data}
@@ -403,9 +404,34 @@ n_extra_in_clean <- reliability_comparison %>%
 # adding together these numbers, we seem to have two utterances unaccounted for
 # possibly due to joining issues. not bad but should be tracked down later.
 
-edit_dist <- reliability_comparison %>%
+dict <- reliability_comparison %>%
+  select(utterance, raw_utterance) %>%
+  pivot_longer(cols = c("utterance", "raw_utterance"), 
+                        names_to = "type", values_to = "utterance") %>%
+  filter(!is.na(utterance)) %>% 
+  mutate(utterance = str_remove_all(utterance, "[,\\.!\\?']"),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", ""),
+         utterance = trimws(utterance)) %>%
+  mutate(word = strsplit(utterance, " ")) %>% 
+  unnest(word) %>%
+  group_by(word) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  arrange(desc(n)) %>%
+  mutate(id = 1:n())
+
+error_rate <- reliability_comparison %>%
   filter(!is.na(raw_utterance) & ! is.na(utterance)) %>%
-  mutate(edit_dist = stringdist(raw_utterance, utterance)) 
+  mutate(utterance = str_remove_all(utterance, "[,\\.!\\?']"),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", " "),
+         utterance = str_replace_all(utterance, "  ", ""),
+         utterance = trimws(utterance)) %>%
+  mutate(word = strsplit(utterance, " ")) %>% 
+  unnest(word) %>%
+  
 
 edit_dist %>%
   summarise(mean = mean(edit_dist))
