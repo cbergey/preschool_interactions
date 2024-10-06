@@ -1,2 +1,4 @@
 .DS_Store
 private_data/
+.venv/
+GoogleNews-vectors-negative300.bin.gz

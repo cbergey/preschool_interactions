@@ -1,0 +1,136 @@
+---
+title: "imaginative play networks"
+output: html_document
+date: "2024-09-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(word2vec)
+library(igraph)
+library(ggraph)
+library(udpipe)
+library(tidyverse)
+library(remotes)
+library(here)
+library(gganimate)
+library(gifski)
+library(zoo)
+library(ggforce)
+```
+
+
+```{r read-data}
+corpus <- read_csv(here("private_data/interactions.csv"))
+raw_corpus <- read_csv(here("private_data/interactions_raw.csv"))
+people <- read_csv(here("private_data/preschool_person_ids.csv"))
+sessions <- read_csv(here("private_data/preschool_session.csv"))
+
+corpus <- corpus %>%
+  mutate(child_id = as.numeric(child_id),
+         target_child = if_else(child_id < 10, paste0("CHILD_0", child_id),
+                            paste0("CHILD_", child_id)),
+         speaker_type = if_else(str_detect(speaker_id, "CHILD"), "child", "adult"),
+         session_id = as.numeric(session_id),
+         classroom = if_else(child_id < 18 | child_id == 37, "threes", "fours")) %>%
+  group_by(child_id, session_id) %>%
+  mutate(time_frame = round(timestamp/30, 0)) %>%
+  ungroup() %>% 
+  left_join(people %>% select(child_id, date_birth), by = c("child_id")) %>%
+  left_join(sessions %>% select(session, date, person_id), 
+            by = c("child_id" = "person_id", "session_id" = "session")) %>%
+  mutate(date_birth = as.Date(as.yearmon(date_birth, "%m/%Y")),
+         date = as.Date(date, "%m/%d/%y"),
+         age = as.numeric(date - date_birth)/30) %>%
+  mutate(transcript_file = paste(child_id, session_id, sep = "_")) %>%
+  mutate(utterance = str_replace_all(utterance, ",", " ,"),
+         utterance = str_replace_all(utterance, "\\.", " ."),
+         utterance = str_replace_all(utterance, "\\?", " \\?"),
+         utterance = str_replace_all(utterance, "!", " !"),
+         utterance = str_to_lower(utterance)) %>%
+  filter(!is.na(utterance))
+```
+
+```{r corpus}
+library(dplyr)
+
+# imaginative play keyword definitions
+hospital_keywords <- c('nurse', 'doctor', 'broke', 'leg', 'bandage', 'bandaid', 'surgery', 'cast', 'registered_nurse', 'midwife', 
+                       'tore', 'Band_Aids', 'forearm', 'nurse_practitioner', 'Ace_bandage', 'Casting', 'Band_Aid', 'nurses', 
+                       'bandaids', 'respiratory_therapist', 'surgeries', 'Cast', 'surgeon', 'gauze_bandage', 'breaking', 'legs', 
+                       'gauze', 'reconstructive_surgery', 'dentist', 'physician', 'gynecologist', 'sticking_plasters', 'sticking_plaster', 
+                       'sugery', 'shin', 'bandages', 'broken', 'casting', 'casted', 'casts', 'thigh', 'smashed', 'surgey', 'ankle', 
+                       'surgical_procedure', 'doctors', 'adhesive_bandage')
+
+family_keywords <- c('mommy', 'daddy', 'child', 'daughter', 'son', 'sister', 'brother', 'Mommy', 'nephew', 'daughter', 'mommies', 
+                     'mom', 'son', 'younger_brother', 'father', 'brother', 'children', 'infant', 'baby', 'mama', 'dad', 'daddy', 
+                     'mother', 'mommy', 'uncle', 'grandson', 'granddaughter', 'chid', 'niece', 'toddler', 'Daddy', 'aunt', 'momma', 
+                     'daughters', 'sisters') #nolint
+
+monsters_keywords <- c('monster', 'monstrous', 'monsters', 'demon', 'beast', 'gigantic') #nolint
+
+animals_keywords <- c('whale', 'dog', 'doggy', 'cat', 'lion', 'animal', 'dinosaur', 'dogs', 'dolphin', 'dinosaur_fossil', 
+                      'beagle', 'tiger', 'whales', 'hyena', 'cats', 'lions', 'animal_welfare', 'gorilla', 'kitten', 'animals', 
+                      'minke_whale', 'dinosaurs', 'doggie', 'cat', 'humpback_whale', 'dino', 'feline', 'T._rex', 'pooch', 'Doggy',  #nolint
+                      'humpback', 'puppy', 'elephant', 'dog', 'pet', 'Tyrannosaurus_Rex', 'Animal', 'pit_bull')  # nolint
+
+```
+
+```{R thematic-network}
+# tagging utterances with play themes
+thematic_corpus <- corpus %>%
+  filter(session_id == 8) %>%
+  mutate(
+    category = case_when(
+      str_detect(utterance, paste(hospital_keywords, collapse = "|")) ~ "hospital",
+      str_detect(utterance, paste(family_keywords, collapse = "|")) ~ "family",
+      str_detect(utterance, paste(monsters_keywords, collapse = "|")) ~ "monsters",
+      str_detect(utterance, paste(animals_keywords, collapse = "|")) ~ "animals",
+      TRUE ~ "other"
+    )
+  ) %>%
+  mutate(time_burst = round(timestamp / 10, 0)) %>%
+  arrange(timestamp) 
+
+thematic_corpus
+# defining edges
+thematic_edges <- thematic_corpus %>%
+  filter(category != "other") %>%
+  group_by(target_child, time_burst, category) %>%
+  distinct(speaker_id) %>%
+  rename(source = speaker_id) %>%
+  mutate(target = source) %>%
+  complete(source, target) %>%
+  filter(!(source == target)) %>%
+  ungroup() %>%
+  select(source, target, target_child, time_burst, category)
+
+# defining nodes
+thematic_nodes <- thematic_corpus %>%
+  filter(speaker_id %in% thematic_edges$source | speaker_id == target_child ) %>%
+  distinct(speaker_id) %>%
+  rename(name = speaker_id)
+
+thematic_nodes
+# joining in network
+network <- graph_from_data_frame(d = thematic_edges, vertices = thematic_nodes, directed = F) #nolint
+
+
+ggraph(network, layout = "kk",) +
+  geom_edge_link(aes(color = category)) +
+  geom_node_point() +
+  coord_fixed() +
+  transition_states(time_burst) +
+  shadow_trail(alpha = 1)
+
+# animate(plot, height = 800, width = 800)
+
+# anim_save(here("plots/session_8_theme_propagation.gif"), animation = last_animation())
+animate(plot, width = 800, height = 800, fps = 10, duration = 10, 
+        renderer = gifski_renderer())  # Ensure GIF rendering with gifski
+anim_save(here::here("plots/session_8_theme_propagation.gif"), animation = last_animation())
+```
