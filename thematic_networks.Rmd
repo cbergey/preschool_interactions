@@ -112,7 +112,7 @@ thematic_edges <- thematic_corpus %>%
 # defining nodes
 thematic_nodes <- thematic_corpus %>%
   filter(speaker_id %in% thematic_edges$source | speaker_id == target_child ) %>%
-  distinct(speaker_id) %>%
+  distinct(speaker_id, speaker_type) %>%
   rename(name = speaker_id)
 
 thematic_nodes
@@ -122,9 +122,9 @@ network <- graph_from_data_frame(d = thematic_edges, vertices = thematic_nodes, 
 
 ggraph(network, layout = "kk",) +
   geom_edge_link(aes(color = category)) +
-  geom_node_point() +
+  geom_node_point(aes(color = speaker_type)) +
   coord_fixed() +
-  # facet_wrap(~category) +
+  facet_wrap(~category) +
   transition_states(time_burst) +
   shadow_mark(alpha = 1) + 
   ggtitle(paste0("time point: ", "{closest_state}"))
@@ -135,5 +135,5 @@ ggraph(network, layout = "kk",) +
 # anim_save(here("plots/session_8_theme_propagation.gif"), animation = last_animation())
 animate(plot, width = 800, height = 800, fps = 10, duration = 10, 
         renderer = gifski_renderer())  # Ensure GIF rendering with gifski
-anim_save(here::here("plots/session_8_theme_propagation_sep.gif"), animation = last_animation())
+anim_save(here::here("plots/session_8_theme_propagation_sep_speaker.gif"), animation = last_animation())
 ```
